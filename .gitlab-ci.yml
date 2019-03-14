@@ -1,0 +1,48 @@
+stages:
+  - download
+  - deploy
+
+download:
+  stage: download
+  image: debian:unstable-slim
+  script:
+    - apt-get update
+    - apt-get -y install chromium-driver python3-selenium wget
+    - URL=$(./find_download_url.py) 
+    - FILENAME=$(basename $(echo $URL | cut -d? -f1))
+    - VERSION=$(echo $FILENAME | cut -d_ -f3)
+    - mkdir download
+    - wget -O download/$FILENAME $URL
+  artifacts:
+    paths:
+      - download
+
+variables:   
+  DOCKER_DRIVER: overlay2
+
+services: 
+  - docker:dind 
+
+deploy:
+  stage: deploy
+  image: docker:latest
+  dependencies: 
+    - download
+  script:
+    - VERSION=$(ls download/*.zip | cut -d_ -f3)
+    - mv download/* .
+    - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN registry.gitlab.com
+ 
+    - FROM=nvidia/cudagl:9.1-runtime-centos7
+    - MESA=""
+    - docker build --build-arg from=${FROM} --build-arg mesa=${MESA} -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA .
+    - docker tag $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA $CI_REGISTRY_IMAGE:$VERSION
+    - docker tag $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA $CI_REGISTRY_IMAGE:latest
+    - docker push $CI_REGISTRY_IMAGE
+
+    - FROM=nvidia/cuda:9.1-runtime-centos7
+    - MESA=mesa-dri-drivers
+    - docker build --build-arg from=${FROM} --build-arg mesa=${MESA} -t ${CI_REGISTRY_IMAGE}/mesa:$CI_COMMIT_SHA .
+    - docker tag ${CI_REGISTRY_IMAGE}/mesa:$CI_COMMIT_SHA ${CI_REGISTRY_IMAGE}/mesa:$VERSION
+    - docker tag ${CI_REGISTRY_IMAGE}/mesa:$CI_COMMIT_SHA ${CI_REGISTRY_IMAGE}/mesa:latest
+    - docker push ${CI_REGISTRY_IMAGE}/mesa
